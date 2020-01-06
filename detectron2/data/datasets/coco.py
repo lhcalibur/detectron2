@@ -6,7 +6,6 @@ import os
 import datetime
 import json
 import numpy as np
-import imagesize
 
 from PIL import Image
 
@@ -186,7 +185,7 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
         dataset_dicts.append(record)
 
     if num_instances_without_valid_segmentation > 0:
-        logger.warn(
+        logger.warning(
             "Filtered out {} instances without valid segmentation. "
             "There might be issues in your dataset generation process.".format(
                 num_instances_without_valid_segmentation
@@ -263,13 +262,9 @@ def load_sem_seg(gt_root, image_root, gt_ext="png", image_ext="jpg"):
 
     dataset_dicts = []
     for (img_path, gt_path) in zip(input_files, gt_files):
-        local_path = PathManager.get_local_path(gt_path)
-        w, h = imagesize.get(local_path)
         record = {}
         record["file_name"] = img_path
         record["sem_seg_file_name"] = gt_path
-        record["height"] = h
-        record["width"] = w
         dataset_dicts.append(record)
 
     return dataset_dicts
@@ -405,7 +400,7 @@ def convert_to_coco_json(dataset_name, output_file, allow_cached=True):
 
     PathManager.mkdirs(os.path.dirname(output_file))
     with file_lock(output_file):
-        if os.path.exists(output_file) and allow_cached:
+        if PathManager.exists(output_file) and allow_cached:
             logger.info(f"Cached annotations in COCO format already exist: {output_file}")
         else:
             logger.info(f"Converting dataset annotations in '{dataset_name}' to COCO format ...)")
