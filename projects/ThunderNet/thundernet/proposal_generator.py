@@ -31,7 +31,6 @@ class ThunderNetRPNHead(nn.Module):
         in_channels = [s.channels for s in input_shape]
         assert len(set(in_channels)) == 1, "Each level must have the same channel!"
         in_channels = in_channels[0]
-        out_channels = 256
 
         # RPNHead should take the same input as anchor generator
         # NOTE: it assumes that creating an anchor generator does not have unwanted side effect.
@@ -42,26 +41,15 @@ class ThunderNetRPNHead(nn.Module):
                 len(set(num_cell_anchors)) == 1
         ), "Each level must have the same number of cell anchors"
         num_cell_anchors = num_cell_anchors[0]
-
-        # for the hidden representation
-        self.depthwise_conv_5x5 = nn.Conv2d(in_channels, in_channels, kernel_size=5, stride=1, padding=2,
-                                            groups=in_channels)
-        self.conv_1x1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
         # 1x1 conv for predicting objectness logits
-        self.objectness_logits = nn.Conv2d(out_channels, num_cell_anchors, kernel_size=1, stride=1)
+        self.objectness_logits = nn.Conv2d(in_channels, num_cell_anchors, kernel_size=1, stride=1)
         # 1x1 conv for predicting box2box transform deltas
         self.anchor_deltas = nn.Conv2d(
-            out_channels, num_cell_anchors * box_dim, kernel_size=1, stride=1
+            in_channels, num_cell_anchors * box_dim, kernel_size=1, stride=1
         )
-
-        for l in [self.depthwise_conv_5x5, self.conv_1x1, self.objectness_logits, self.anchor_deltas]:
-            nn.init.normal_(l.weight, std=0.01)
-            nn.init.constant_(l.bias, 0)
-        self.rpn_features = nn.Sequential(
-            nn.Conv2d(out_channels, in_channels, kernel_size=1, stride=1, padding=0),
-            nn.Sigmoid()
-        )
-        self.rpn_feature_out_channels = in_channels
+        for layer in [self.objectness_logits, self.anchor_deltas]:
+            nn.init.normal_(layer.weight, std=0.01)
+            nn.init.constant_(layer.bias, 0)
 
     def forward(self, features):
         """
@@ -70,16 +58,10 @@ class ThunderNetRPNHead(nn.Module):
         """
         pred_objectness_logits = []
         pred_anchor_deltas = []
-        rpn_features = []
         for x in features:
-            x = F.relu(self.depthwise_conv_5x5(x))
-            t = F.relu(self.conv_1x1(x))
-            rpn_feature = self.rpn_features(t)
-            rpn_feature = torch.mul(rpn_feature, x)
-            rpn_features.append(rpn_feature)
-            pred_objectness_logits.append(self.objectness_logits(t))
-            pred_anchor_deltas.append(self.anchor_deltas(t))
-        return pred_objectness_logits, pred_anchor_deltas, rpn_features
+            pred_objectness_logits.append(self.objectness_logits(x))
+            pred_anchor_deltas.append(self.anchor_deltas(x))
+        return pred_objectness_logits, pred_anchor_deltas
 
 
 @PROPOSAL_GENERATOR_REGISTRY.register()
@@ -94,6 +76,7 @@ class ThunderNetRPN(nn.Module):
         # fmt: off
         self.min_box_side_len = cfg.MODEL.PROPOSAL_GENERATOR.MIN_SIZE
         self.in_features = cfg.MODEL.RPN.IN_FEATURES
+        assert len(self.in_features) == 1
         self.nms_thresh = cfg.MODEL.RPN.NMS_THRESH
         self.batch_size_per_image = cfg.MODEL.RPN.BATCH_SIZE_PER_IMAGE
         self.positive_fraction = cfg.MODEL.RPN.POSITIVE_FRACTION
@@ -149,7 +132,7 @@ class ThunderNetRPN(nn.Module):
         gt_boxes = [x.gt_boxes for x in gt_instances] if gt_instances is not None else None
         del gt_instances
         features = [features[f] for f in self.in_features]
-        pred_objectness_logits, pred_anchor_deltas, rpn_features = self.rpn_head(features)
+        pred_objectness_logits, pred_anchor_deltas = self.rpn_head(features)
         anchors = self.anchor_generator(features)
         # TODO: The anchors only depend on the feature map shape; there's probably
         # an opportunity for some optimizations (e.g., caching anchors).
@@ -195,4 +178,4 @@ class ThunderNetRPN(nn.Module):
             inds = [p.objectness_logits.sort(descending=True)[1] for p in proposals]
             proposals = [p[ind] for p, ind in zip(proposals, inds)]
 
-        return proposals, losses, rpn_features
+        return proposals, losses

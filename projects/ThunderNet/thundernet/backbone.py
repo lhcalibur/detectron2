@@ -14,17 +14,46 @@ class CEM(nn.Module):
         hidden_channels = 245
         self.conv_c3 = nn.Conv2d(c3_in_channels, hidden_channels, 1, 1, 0)
         self.conv_c4 = nn.Conv2d(c4_in_channels, hidden_channels, 1, 1, 0)
-        self.fc_glb = nn.Linear(c4_in_channels, hidden_channels)
+        self.fc_glb = nn.Linear(hidden_channels, hidden_channels)
         self.out_channels = 245
 
     def forward(self, c3, c4):
         c3 = self.conv_c3(c3)
         c4 = self.conv_c4(c4)
         glb = c4.mean([2, 3])
-        c4 = F.interpolate(c4, scale_factor=2, mode="nearest", align_corners=False)
+        # c4 = F.interpolate(c4, scale_factor=2, mode="nearest", align_corners=None)
+        c4 = F.interpolate(c4, scale_factor=2, mode="bilinear", align_corners=False)
         glb = self.fc_glb(glb)
+        glb = glb.unsqueeze(-1).unsqueeze(-1)
         x = c3 + c4 + glb
         return x
+
+
+class SAM(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        out_channels = 256
+        # for the hidden representation
+        self.depthwise_conv_5x5 = nn.Conv2d(in_channels, in_channels, kernel_size=5, stride=1, padding=2,
+                                            groups=in_channels)
+        self.conv_1x1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+        self.sam_features = nn.Sequential(
+            nn.Conv2d(out_channels, in_channels, kernel_size=1, stride=1, padding=0),
+            nn.Sigmoid()
+        )
+        self.rpn_in_features_out_channels = out_channels
+        self.sam_out_channels = in_channels
+
+        for layer in [self.depthwise_conv_5x5, self.conv_1x1]:
+            nn.init.normal_(layer.weight, std=0.01)
+            nn.init.constant_(layer.bias, 0)
+
+    def forward(self, cem):
+        x = F.relu(self.depthwise_conv_5x5(cem))
+        x = F.relu(self.conv_1x1(x))
+        sam_features = self.sam_features(x)
+        sam = torch.mul(sam_features, cem)
+        return x, sam
 
 
 def channel_shuffle(x, groups):
@@ -54,9 +83,16 @@ class InvertedResidual(nn.Module):
         branch_features = oup // 2
         assert (self.stride != 1) or (inp == branch_features << 1)
 
+        kernel_size = 5
+        rate = 1
+        kernel_size_effective = kernel_size + (kernel_size - 1) * (rate - 1)
+        pad_total = kernel_size_effective - 1
+        assert pad_total % 2 == 0
+        pad = pad_total // 2
+
         if self.stride > 1:
             self.branch1 = nn.Sequential(
-                self.depthwise_conv(inp, inp, kernel_size=3, stride=self.stride, padding=1),
+                self.depthwise_conv(inp, inp, kernel_size=kernel_size, stride=self.stride, padding=pad),
                 nn.BatchNorm2d(inp),
                 nn.Conv2d(inp, branch_features, kernel_size=1, stride=1, padding=0, bias=False),
                 nn.BatchNorm2d(branch_features),
@@ -68,7 +104,8 @@ class InvertedResidual(nn.Module):
                       branch_features, kernel_size=1, stride=1, padding=0, bias=False),
             nn.BatchNorm2d(branch_features),
             nn.ReLU(inplace=True),
-            self.depthwise_conv(branch_features, branch_features, kernel_size=5, stride=self.stride, padding=2),
+            self.depthwise_conv(branch_features, branch_features, kernel_size=kernel_size, stride=self.stride,
+                                padding=pad),
             nn.BatchNorm2d(branch_features),
             nn.Conv2d(branch_features, branch_features, kernel_size=1, stride=1, padding=0, bias=False),
             nn.BatchNorm2d(branch_features),
@@ -133,6 +170,7 @@ class SNet(Backbone):
             for i in range(repeats - 1):
                 seq.append(InvertedResidual(output_channels, output_channels, 1))
             if name == 'stage4' and self.include_conv5:
+                input_channels = output_channels
                 output_channels = self._stage_out_channels[-1]
                 seq.append(
                     nn.Sequential(
@@ -144,13 +182,18 @@ class SNet(Backbone):
             setattr(self, name, nn.Sequential(*seq))
             self._out_feature_channels[name] = output_channels
             input_channels = output_channels
-        self.cem = CEM(self._stage_out_channels[-2], self._stage_out_channels[-1])
+        self.cem = CEM(self._out_feature_channels['stage3'], self._out_feature_channels['stage4'])
+        self.sam = SAM(self.cem.out_channels)
 
-        self._out_features = ['stage3', 'stage4', 'cem']
+        self._out_features = ['stage3', 'stage4', 'cem', 'sam', 'rpn_in_features']
         self._out_feature_strides['stage3'] = 16
         self._out_feature_strides['stage4'] = 32
         self._out_feature_strides['cem'] = 16
+        self._out_feature_strides['sam'] = 16
+        self._out_feature_strides['rpn_in_features'] = 16
         self._out_feature_channels['cem'] = self.cem.out_channels
+        self._out_feature_channels['sam'] = self.sam.sam_out_channels
+        self._out_feature_channels['rpn_in_features'] = self.sam.rpn_in_features_out_channels
 
     def forward(self, x):
         outputs = {}
@@ -163,4 +206,18 @@ class SNet(Backbone):
         outputs['stage4'] = x
         cem = self.cem(outputs['stage3'], outputs['stage4'])
         outputs['cem'] = cem
+        rpn_in_features, sam = self.sam(cem)
+        outputs['rpn_in_features'] = rpn_in_features
+        outputs['sam'] = sam
         return outputs
+
+    @property
+    def size_divisibility(self):
+        """
+        Some backbones require the input height and width to be divisible by a
+        specific integer. This is typically true for encoder / decoder type networks
+        with lateral connection (e.g., FPN) for which feature maps need to match
+        dimension in the "bottom up" and "top down" paths. Set to 0 if no specific
+        input size divisibility is required.
+        """
+        return self._out_feature_strides['stage4']

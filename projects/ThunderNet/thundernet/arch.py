@@ -2,6 +2,7 @@ import logging
 
 import torch
 from detectron2.modeling import build_backbone, build_proposal_generator, build_roi_heads
+from detectron2.structures import ImageList
 
 from detectron2.utils.events import get_event_storage
 
@@ -21,7 +22,6 @@ class ThunderNet(nn.Module):
         self.backbone = build_backbone(cfg)
         self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
         backbone_shape = self.backbone.output_shape()
-        backbone_shape.update(self.proposal_generator.rpn_features_shape())
         self.roi_heads = build_roi_heads(cfg, backbone_shape)
         self.vis_period = cfg.VIS_PERIOD
         self.input_format = cfg.INPUT.FORMAT
@@ -89,3 +89,12 @@ class ThunderNet(nn.Module):
         losses.update(detector_losses)
         losses.update(proposal_losses)
         return losses
+
+    def preprocess_image(self, batched_inputs):
+        """
+        Normalize, pad and batch the input images.
+        """
+        images = [x["image"].to(self.device) for x in batched_inputs]
+        images = [self.normalizer(x) for x in images]
+        images = ImageList.from_tensors(images, self.backbone.size_divisibility)
+        return images
