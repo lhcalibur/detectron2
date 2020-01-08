@@ -7,6 +7,4 @@ from detectron2.config import CfgNode as CN
 def add_thundernet_config(cfg):
     _C = cfg
 
-    _C.MODEL.TRIDENT = CN()
-
     _C.MODEL.BACKBONE.ARCH = "SNet49"

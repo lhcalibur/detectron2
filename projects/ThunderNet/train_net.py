@@ -12,7 +12,7 @@ from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
 from detectron2.engine import DefaultTrainer, default_argument_parser, default_setup, launch
 from detectron2.evaluation import COCOEvaluator, verify_results
-from projects.ThunderNet.thundernet.config import add_thundernet_config
+from thundernet.config import add_thundernet_config
 
 
 class Trainer(DefaultTrainer):
