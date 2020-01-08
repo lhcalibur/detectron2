@@ -1,4 +1,4 @@
 _BASE_: "./Base-ThunderNet.yaml"
 MODEL:
   BACKBONE:
-    ARCH: "SNet49"
+    NAME: "SNet49"

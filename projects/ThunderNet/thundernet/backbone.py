@@ -128,11 +128,9 @@ class InvertedResidual(nn.Module):
         return out
 
 
-@BACKBONE_REGISTRY.register()
 class SNet(Backbone):
-    def __init__(self, cfg, input_shape: List[ShapeSpec]):
+    def __init__(self, cfg, input_shape: List[ShapeSpec], backbone_arch):
         super(SNet, self).__init__()
-        backbone_arch = cfg.MODEL.BACKBONE.ARCH
         if backbone_arch == "SNet49":
             stages_repeats, stages_out_channels = [3, 7, 3], [24, 60, 120, 240, 512]
         elif backbone_arch == "SNet146":
@@ -221,3 +219,9 @@ class SNet(Backbone):
         input size divisibility is required.
         """
         return self._out_feature_strides['stage4']
+
+
+@BACKBONE_REGISTRY.register()
+class SNet49(SNet):
+    def __init__(self, cfg, input_shape: List[ShapeSpec]):
+        super().__init__(cfg, input_shape, 'SNet49')
