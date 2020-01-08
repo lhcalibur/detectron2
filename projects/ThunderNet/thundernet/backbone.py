@@ -129,7 +129,7 @@ class InvertedResidual(nn.Module):
 
 
 class SNet(Backbone):
-    def __init__(self, cfg, input_shape: List[ShapeSpec], backbone_arch):
+    def __init__(self, input_shape: List[ShapeSpec], backbone_arch):
         super(SNet, self).__init__()
         if backbone_arch == "SNet49":
             stages_repeats, stages_out_channels = [3, 7, 3], [24, 60, 120, 240, 512]
@@ -224,4 +224,4 @@ class SNet(Backbone):
 @BACKBONE_REGISTRY.register()
 class SNet49(SNet):
     def __init__(self, cfg, input_shape: List[ShapeSpec]):
-        super().__init__(cfg, input_shape, 'SNet49')
+        super().__init__(input_shape, 'SNet49')
