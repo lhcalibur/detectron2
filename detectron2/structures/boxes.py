@@ -55,7 +55,11 @@ class BoxMode(Enum):
             )
             arr = torch.tensor(box)[None, :]
         else:
-            arr = torch.from_numpy(np.asarray(box)).clone()  # avoid modifying the input box
+            # avoid modifying the input box
+            if is_numpy:
+                arr = torch.from_numpy(np.asarray(box)).clone()
+            else:
+                arr = box.clone()
 
         assert to_mode.value not in [
             BoxMode.XYXY_REL,
@@ -120,7 +124,7 @@ class Boxes:
     (support indexing, `to(device)`, `.device`, and iteration over all boxes)
 
     Attributes:
-        tensor: float matrix of Nx4.
+        tensor (torch.Tensor): float matrix of Nx4.
     """
 
     BoxSizeType = Union[List[int], Tuple[int, int]]
