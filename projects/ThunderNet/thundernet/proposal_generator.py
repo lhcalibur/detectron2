@@ -7,7 +7,6 @@ from detectron2.modeling.matcher import Matcher
 
 from detectron2.modeling.box_regression import Box2BoxTransform
 from torch import nn
-import torch.nn.functional as F
 
 from detectron2.layers import ShapeSpec
 
