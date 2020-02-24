@@ -131,6 +131,7 @@ def find_top_rpn_proposals(
         if not valid_mask.all():
             boxes = boxes[valid_mask]
             scores_per_img = scores_per_img[valid_mask]
+            level_ids = level_ids[valid_mask]
         boxes.clip(image_size)
 
         # filter empty boxes
