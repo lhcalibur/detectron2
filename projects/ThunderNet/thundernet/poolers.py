@@ -1,14 +1,14 @@
 import math
 
+import torch
+from torch import nn
 from torchvision.ops import RoIPool, PSRoIPool
 
 from detectron2.layers import ROIAlign, ROIAlignRotated
-from torch import nn
-
-from detectron2.modeling.poolers import ROIPooler as _ROIPooler
+from detectron2.modeling.poolers import assign_boxes_to_levels, convert_boxes_to_pooler_format
 
 
-class ROIPooler(_ROIPooler):
+class ROIPooler(nn.Module):
     def __init__(
             self,
             output_size,
@@ -29,7 +29,6 @@ class ROIPooler(_ROIPooler):
                 a monotically decreasing geometric sequence with a factor of 1/2.
             sampling_ratio (int): The `sampling_ratio` parameter for the ROIAlign op.
             pooler_type (string): Name of the type of pooling operation that should be applied.
-                For instance, "ROIPool" or "ROIAlignV2".
             canonical_box_size (int): A canonical box size in pixels (sqrt(box area)). The default
                 is heuristically defined as 224 pixels in the FPN paper (based on ImageNet
                 pre-training).
@@ -44,39 +43,16 @@ class ROIPooler(_ROIPooler):
                 sufficiently many levels for the input boxes. If the boxes are too large or too
                 small for the input feature maps, the closest level will be used.
         """
+        super().__init__()
         if isinstance(output_size, int):
             output_size = (output_size, output_size)
         assert len(output_size) == 2
         assert isinstance(output_size[0], int) and isinstance(output_size[1], int)
         self.output_size = output_size
 
-        if pooler_type == "ROIAlign":
+        if pooler_type == "PSROIPool":
             self.level_poolers = nn.ModuleList(
-                ROIAlign(
-                    output_size, spatial_scale=scale, sampling_ratio=sampling_ratio, aligned=False
-                )
-                for scale in scales
-            )
-        elif pooler_type == "ROIAlignV2":
-            self.level_poolers = nn.ModuleList(
-                ROIAlign(
-                    output_size, spatial_scale=scale, sampling_ratio=sampling_ratio, aligned=True
-                )
-                for scale in scales
-            )
-        elif pooler_type == "ROIPool":
-            self.level_poolers = nn.ModuleList(
-                RoIPool(output_size, spatial_scale=scale) for scale in scales
-            )
-        elif pooler_type == "ROIAlignRotated":
-            self.level_poolers = nn.ModuleList(
-                ROIAlignRotated(output_size, spatial_scale=scale, sampling_ratio=sampling_ratio)
-                for scale in scales
-            )
-        elif pooler_type == "PSROIPool":
-            self.level_poolers = nn.ModuleList(
-                PSRoIPool(output_size, spatial_scale=scale)
-                for scale in scales
+                PSRoIPool(output_size, spatial_scale=scale) for scale in scales
             )
         else:
             raise ValueError("Unknown pooler type: {}".format(pooler_type))
@@ -101,3 +77,60 @@ class ROIPooler(_ROIPooler):
         self.canonical_level = canonical_level
         assert canonical_box_size > 0
         self.canonical_box_size = canonical_box_size
+
+    def forward(self, x, box_lists):
+        """
+        Args:
+            x (list[Tensor]): A list of feature maps of NCHW shape, with scales matching those
+                used to construct this module.
+            box_lists (list[Boxes] | list[RotatedBoxes]):
+                A list of N Boxes or N RotatedBoxes, where N is the number of images in the batch.
+                The box coordinates are defined on the original image and
+                will be scaled by the `scales` argument of :class:`ROIPooler`.
+
+        Returns:
+            Tensor:
+                A tensor of shape (M, C, output_size, output_size) where M is the total number of
+                boxes aggregated over all N batch images and C is the number of channels in `x`.
+        """
+        num_level_assignments = len(self.level_poolers)
+
+        assert isinstance(x, list) and isinstance(
+            box_lists, list
+        ), "Arguments to pooler must be lists"
+        assert (
+            len(x) == num_level_assignments
+        ), "unequal value, num_level_assignments={}, but x is list of {} Tensors".format(
+            num_level_assignments, len(x)
+        )
+
+        assert len(box_lists) == x[0].size(
+            0
+        ), "unequal value, x[0] batch dim 0 is {}, but box_list has length {}".format(
+            x[0].size(0), len(box_lists)
+        )
+
+        pooler_fmt_boxes = convert_boxes_to_pooler_format(box_lists)
+
+        if num_level_assignments == 1:
+            return self.level_poolers[0](x[0], pooler_fmt_boxes)
+
+        level_assignments = assign_boxes_to_levels(
+            box_lists, self.min_level, self.max_level, self.canonical_box_size, self.canonical_level
+        )
+
+        num_boxes = len(pooler_fmt_boxes)
+        num_channels = x[0].shape[1]
+        output_size = self.output_size[0]
+
+        dtype, device = x[0].dtype, x[0].device
+        output = torch.zeros(
+            (num_boxes, num_channels, output_size, output_size), dtype=dtype, device=device
+        )
+
+        for level, (x_level, pooler) in enumerate(zip(x, self.level_poolers)):
+            inds = torch.nonzero(level_assignments == level).squeeze(1)
+            pooler_fmt_boxes_level = pooler_fmt_boxes[inds]
+            output[inds] = pooler(x_level, pooler_fmt_boxes_level)
+
+        return output
