@@ -21,8 +21,7 @@ class CEM(nn.Module):
         c3 = self.conv_c3(c3)
         c4 = self.conv_c4(c4)
         glb = c4.mean([2, 3])
-        # c4 = F.interpolate(c4, scale_factor=2, mode="nearest", align_corners=None)
-        c4 = F.interpolate(c4, scale_factor=2, mode="bilinear", align_corners=False)
+        c4 = F.interpolate(c4, scale_factor=2, mode="nearest", align_corners=None)
         glb = self.fc_glb(glb)
         glb = glb.unsqueeze(-1).unsqueeze(-1)
         x = c3 + c4 + glb
